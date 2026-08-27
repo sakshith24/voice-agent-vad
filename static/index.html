@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Voice Agent VAD Demo</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #121212; color: #fff; }
+        button { padding: 12px 24px; font-size: 16px; cursor: pointer; border: none; border-radius: 6px; margin: 10px; }
+        .start { background: #00e676; color: #000; }
+        .stop { background: #ff5252; color: #fff; }
+        #log { margin-top: 20px; font-family: monospace; color: #888; }
+    </style>
+</head>
+<body>
+    <h2>Interruptible AI Voice Agent</h2>
+    <div>
+        <button class="start" onclick="startRecording()">Start Conversation</button>
+        <button class="stop" onclick="stopRecording()">Stop</button>
+    </div>
+    <div id="log">Status: Disconnected</div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
