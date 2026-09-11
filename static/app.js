@@ -1,32 +1,192 @@
-let socket;
-let mediaRecorder;
+console.log("app.js loaded");
 
-async function startRecording(){
-    const log = document.getElementById('log');
-    socket = new WebSocket(`ws://${window.location.host}/ws/audio`);
+let socket;
+let audioContext;
+let mediaStream;
+let source;
+let processor;
+let gainNode;
+
+async function startRecording() {
+
+    const log = document.getElementById("log");
+
+    console.log("1. startRecording() called");
+
+    socket = new WebSocket(
+        `ws://${window.location.host}/ws/audio`
+    );
 
     socket.onopen = async () => {
-        log.innerText = "Status : Connected. Listening....";
-        const stream = await navigator.mediaDevices.getUserMedia({audio:true});
-        mediaRecorder = new MediaRecorder(stream , {mimeType:'audio/webm'});
 
-        mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0 && socket.readyState === WebSocket.OPEN){
-                socket.send(event.data);
-            }
-        };
-        mediaRecorder.start(100);
+        console.log("2. WebSocket connected");
+
+        log.innerText = "Status: Connected. Listening...";
+
+        try {
+
+            // Get microphone
+            mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: true
+            });
+
+            console.log("3. Microphone permission granted");
+
+            // Create AudioContext
+            audioContext = new AudioContext();
+
+            console.log(
+                "4. Audio sample rate:",
+                audioContext.sampleRate
+            );
+
+            // Microphone → AudioContext
+            source = audioContext.createMediaStreamSource(
+                mediaStream
+            );
+
+            // Process audio in chunks
+            processor = audioContext.createScriptProcessor(
+                4096,
+                1,
+                1
+            );
+
+            // Prevent microphone audio from playing through speakers
+            gainNode = audioContext.createGain();
+            gainNode.gain.value = 0;
+
+            processor.onaudioprocess = (event) => {
+
+                if (
+                    !socket ||
+                    socket.readyState !== WebSocket.OPEN
+                ) {
+                    return;
+                }
+
+                // Get microphone samples
+                const inputData =
+                    event.inputBuffer.getChannelData(0);
+
+                // Float32 → Int16 PCM
+                const pcmData = new Int16Array(
+                    inputData.length
+                );
+
+                for (let i = 0; i < inputData.length; i++) {
+
+                    let sample = inputData[i];
+
+                    // Clamp between -1 and +1
+                    sample = Math.max(
+                        -1,
+                        Math.min(1, sample)
+                    );
+
+                    // Convert Float32 → Int16
+                    pcmData[i] =
+                        sample < 0
+                            ? sample * 32768
+                            : sample * 32767;
+                }
+
+                // Send raw PCM bytes
+                socket.send(pcmData.buffer);
+
+                console.log(
+                    "5. PCM chunk sent:",
+                    pcmData.byteLength,
+                    "bytes"
+                );
+            };
+
+            // Connect audio pipeline
+            source.connect(processor);
+            processor.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            console.log("6. PCM recording started");
+
+            log.innerText =
+                "Status: Recording PCM audio...";
+
+        } catch (error) {
+
+            console.error(
+                "Microphone error:",
+                error
+            );
+
+            log.innerText =
+                "Microphone error: " + error.message;
+        }
     };
-    socket.onmessage = (event) => {
-        console.log("Server response:", event(data));
+
+
+    socket.onerror = (error) => {
+
+        console.error(
+            "WebSocket error:",
+            error
+        );
     };
+
 
     socket.onclose = () => {
-        log.innerText = "status: Disconnected"
+
+        console.log("WebSocket closed");
+
+        log.innerText =
+            "Status: Disconnected";
     };
 }
 
+
 function stopRecording() {
-    if (mediaRecorder) mediaRecorder.stop();
-    if (socket) socket.close();
+
+    console.log("STOP clicked");
+
+    // Stop microphone
+    if (mediaStream) {
+
+        mediaStream.getTracks().forEach(
+            track => track.stop()
+        );
+
+        mediaStream = null;
+    }
+
+    // Disconnect audio nodes
+    if (source) {
+        source.disconnect();
+        source = null;
+    }
+
+    if (processor) {
+        processor.disconnect();
+        processor = null;
+    }
+
+    if (gainNode) {
+        gainNode.disconnect();
+        gainNode = null;
+    }
+
+    // Close AudioContext
+    if (audioContext) {
+
+        audioContext.close();
+        audioContext = null;
+    }
+
+    // Close WebSocket
+    if (
+        socket &&
+        socket.readyState === WebSocket.OPEN
+    ) {
+        socket.close();
+    }
+
+    console.log("Recording stopped");
 }

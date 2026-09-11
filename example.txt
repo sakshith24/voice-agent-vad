@@ -1,0 +1,130 @@
+console.log("app.js loaded");
+
+let socket;
+let mediaRecorder;
+let stream;
+
+async function startRecording() {
+
+    const log = document.getElementById("log");
+
+    console.log("1. startRecording() called");
+
+    socket = new WebSocket(
+        `ws://${window.location.host}/ws/audio`
+    );
+
+    socket.onopen = async () => {
+
+        console.log("2. WebSocket connected");
+
+        log.innerText = "Status: Connected. Listening...";
+
+        try {
+
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: true
+            });
+
+            console.log("3. Microphone permission granted");
+            console.log("Audio tracks:", stream.getAudioTracks());
+
+            mediaRecorder = new MediaRecorder(
+                stream,
+                { mimeType: "audio/webm" }
+            );
+
+            console.log(
+                "4. MediaRecorder created:",
+                mediaRecorder.state
+            );
+
+            mediaRecorder.ondataavailable = (event) => {
+
+                console.log(
+                    "5. Audio data available:",
+                    event.data.size,
+                    "bytes"
+                );
+
+                if (
+                    event.data.size > 0 &&
+                    socket.readyState === WebSocket.OPEN
+                ) {
+
+                    socket.send(event.data);
+
+                    console.log("6. Audio chunk sent");
+                }
+            };
+
+            mediaRecorder.onerror = (event) => {
+                console.error("MediaRecorder error:", event);
+            };
+
+            mediaRecorder.onstart = () => {
+                console.log("7. MediaRecorder started");
+            };
+
+            mediaRecorder.onstop = () => {
+                console.log("8. MediaRecorder stopped");
+                if (socket && socket.readyState === WebSocket.OPEN){
+                    socket.close();
+                }
+            };
+
+            mediaRecorder.start(100);
+
+            console.log(
+                "9. Recording started:",
+                mediaRecorder.state
+            );
+
+        } catch (error) {
+
+            console.error(
+                "Microphone error:",
+                error
+            );
+
+            log.innerText =
+                "Microphone error: " + error.message;
+        }
+    };
+
+    socket.onmessage = (event) => {
+        console.log(
+            "Server response:",
+            event.data
+        );
+    };
+
+    socket.onerror = (error) => {
+        console.error(
+            "WebSocket error:",
+            error
+        );
+    };
+
+    socket.onclose = () => {
+
+        console.log("10. WebSocket closed");
+
+        log.innerText = "Status: Disconnected";
+    };
+}
+
+
+function stopRecording() {
+    console.log("STOP clicked");
+
+    // 1. Stop mic hardware track access immediately
+    if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+    }
+
+    // 2. Stop MediaRecorder - this triggers ondataavailable (final chunk) then onstop synchronously
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+    }
+}

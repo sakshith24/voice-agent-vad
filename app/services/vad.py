@@ -1,150 +1,109 @@
-import numpy as np
 import torch
-import torchaudio
-import wave
+from silero_vad import load_silero_vad
 
 
 class VADService:
 
-    def __init__(self, threshold: float = 0.5):
+    def __init__(
+        self,
+        threshold: float = 0.5,
+        max_silence_chunks: int = 10
+    ):
 
+        # Audio configuration
         self.sample_rate = 16000
+        self.chunk_size = 512
+
+        # VAD configuration
         self.threshold = threshold
+        self.max_silence_chunks = max_silence_chunks
 
-        self.model, self.utils = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            force_reload=False,
-            onnx=False
-        )
+        # State
+        self.is_speaking = False
+        self.silence_chunks = 0
+        self.audio_buffer = []
 
-        (
-            self.get_speech_timestamps,
-            _,
-            _,
-            _,
-            _
-        ) = self.utils
+        # Load Silero VAD
+        self.model = load_silero_vad()
 
-    def preprocess_audio(
-        self,
-        audio_bytes: bytes,
-        input_sample_rate: int,
-        channels: int
-    ):
+    def process_chunk(self, audio_chunk: torch.Tensor):
 
-        # Convert bytes → int16
-        audio_int16 = np.frombuffer(
-            audio_bytes,
-            dtype=np.int16
-        ).copy()
-
-        if len(audio_int16) == 0:
-            return torch.empty(0)
-
-        # int16 → float32
-        audio_float32 = (
-            audio_int16.astype(np.float32) / 32768.0
-        )
-
-        # Stereo → mono
-        if channels > 1:
-
-            audio_float32 = audio_float32.reshape(
-                -1,
-                channels
+        # Make sure the chunk has exactly 512 samples
+        if len(audio_chunk) != self.chunk_size:
+            raise ValueError(
+                f"Expected {self.chunk_size} samples, "
+                f"got {len(audio_chunk)}"
             )
 
-            audio_float32 = audio_float32.mean(axis=1)
+        # Run Silero VAD
+        speech_probability = self.model(
+            audio_chunk,
+            self.sample_rate
+        ).item()
 
-        audio = torch.from_numpy(audio_float32)
-
-        # Resample → 16 kHz
-        if input_sample_rate != 16000:
-
-            audio = torchaudio.functional.resample(
-                audio,
-                input_sample_rate,
-                16000
-            )
-
-        return audio
-
-    def is_speech(
-        self,
-        audio_bytes: bytes,
-        input_sample_rate: int,
-        channels: int
-    ):
-
-        audio = self.preprocess_audio(
-            audio_bytes,
-            input_sample_rate,
-            channels
+        print(
+            f"Speech probability: "
+            f"{speech_probability:.3f}"
         )
 
-        if audio.numel() == 0:
-            return False
+        # --------------------------------
+        # SPEECH
+        # --------------------------------
 
-        chunk_size = 512
+        if speech_probability >= self.threshold:
 
-        speech_detected = False
+            # Reset silence counter
+            self.silence_chunks = 0
 
-        # Process audio in 512-sample chunks
-        for start in range(
-            0,
-            len(audio) - chunk_size + 1,
-            chunk_size
-        ):
+            # Speech just started
+            if not self.is_speaking:
 
-            chunk = audio[
-                start:start + chunk_size
-            ]
+                self.is_speaking = True
 
-            # IMPORTANT:
-            # chunk must contain exactly 512 samples
-            assert len(chunk) == 512
+                print("🎤 Speech started")
 
-            speech_prob = self.model(
-                chunk,
-                16000
-            ).item()
+            # Buffer every speech chunk
+            self.audio_buffer.append(audio_chunk)
+
+            return None
+
+        # --------------------------------
+        # SILENCE
+        # --------------------------------
+
+        if self.is_speaking:
+
+            self.silence_chunks += 1
 
             print(
-                f"Speech probability: "
-                f"{speech_prob:.3f}"
+                f"Silence chunks: "
+                f"{self.silence_chunks}/"
+                f"{self.max_silence_chunks}"
             )
 
-            if speech_prob >= self.threshold:
-                speech_detected = True
+            # Not enough silence yet
+            if self.silence_chunks < self.max_silence_chunks:
+                return None
 
-        return speech_detected
+            # --------------------------------
+            # SPEECH ENDED
+            # --------------------------------
 
+            print("🔇 Speech ended")
 
-if __name__ == "__main__":
+            self.is_speaking = False
 
-    vad = VADService()
+            # Combine all buffered chunks
+            speech_audio = torch.cat(
+                self.audio_buffer
+            )
 
-    with wave.open("audio.wav", "rb") as wav:
+            # Reset state
+            self.audio_buffer = []
+            self.silence_chunks = 0
 
-        channels = wav.getnchannels()
-        sample_rate = wav.getframerate()
+            # Return complete speech
+            return speech_audio
 
-        print("Channels:", channels)
-        print("Sample width:", wav.getsampwidth())
-        print("Sample rate:", sample_rate)
+        return None
 
-        audio_bytes = wav.readframes(
-            wav.getnframes()
-        )
-
-    result = vad.is_speech(
-        audio_bytes,
-        input_sample_rate=sample_rate,
-        channels=channels
-    )
-
-    print(
-        "Speech detected:",
-        result
-    )
