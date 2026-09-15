@@ -7,8 +7,10 @@ from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 from app.services.vad import VADService
+from app.pipeline import VoicePipeline
 
 load_dotenv()
+pipeline = VoicePipeline()
 
 app = FastAPI(title="Interruptible Voice Agent")
 
@@ -68,12 +70,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Update the buffer to hold remaining leftover samples
                 audio_buffer = audio_buffer[chunk_size:]
 
-                # 6. Send chunk to VAD
-                speech = vad.process_chunk(chunk)
-
-                if speech is not None:
-                    print("✅ Complete speech segment detected")
-                    print("Samples:", len(speech))
+                text = await pipeline.process_chunk(
+                    chunk,
+                    sample_rate=16000
+                )
+                if text is not None:
+                    print("final text: ", text)
 
     except WebSocketDisconnect:
         print("Client disconnected")

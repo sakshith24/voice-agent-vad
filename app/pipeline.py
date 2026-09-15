@@ -1,37 +1,45 @@
 import asyncio
-from app.services.stt import STTService
+
 from app.services.vad import VADService
-
-# Initialize services
-vad = VADService()
-stt = STTService()
+from app.services.stt import STTService
 
 
-async def process_speech_async(speech_audio, sample_rate=16000):
-    """Offload blocking HTTP request to an async thread pool."""
-    loop = asyncio.get_running_loop()
-    # Runs the synchronous stt.transcribe call in a background thread
-    text = await loop.run_in_executor(
-        None, stt.transcribe, speech_audio, sample_rate
-    )
-    print("User said:", text)
-    return text
+class VoicePipeline:
 
+    def __init__(self):
+        self.vad = VADService()
+        self.stt = STTService()
 
-async def run_pipeline():
-    sample_rate = 16000
+    async def process_chunk(self, chunk, sample_rate=16000):
+        """
+        Process one 512-sample audio chunk.
 
-    while True:
-        chunk = await get_next_audio_chunk()  # Replace with your mic/stream reader
+        Audio flow:
+        chunk → VAD → complete speech → STT
+        """
 
-        # VAD accumulates audio frames until speech ends
-        speech_audio = vad.process_chunk(chunk)
+        speech_audio = self.vad.process_chunk(chunk)
 
-        if speech_audio is not None:
-            # Dispatch transcription without stopping the audio reading loop
-            asyncio.create_task(
-                process_speech_async(speech_audio, sample_rate)
-            )
+        # VAD has not detected the end of speech yet
+        if speech_audio is None:
+            return None
 
+        print("✅ Complete speech segment detected")
+        print("Samples:", len(speech_audio))
+
+        # STT is a blocking HTTP request,
+        # so run it in a background thread.
+        loop = asyncio.get_running_loop()
+
+        text = await loop.run_in_executor(
+            None,
+            self.stt.transcribe,
+            speech_audio,
+            sample_rate
+        )
+
+        print("📝 User said:", text)
+
+        return text
 
 # asyncio.run(run_pipeline())
