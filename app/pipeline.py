@@ -2,6 +2,7 @@ import asyncio
 
 from app.services.vad import VADService
 from app.services.stt import STTService
+from app.services.llm import LLMService
 
 
 class VoicePipeline:
@@ -9,6 +10,7 @@ class VoicePipeline:
     def __init__(self):
         self.vad = VADService()
         self.stt = STTService()
+        self.llm = LLMService()
 
     async def process_chunk(self, chunk, sample_rate=16000):
         """
