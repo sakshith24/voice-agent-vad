@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from app.services.vad import VADService
 from app.services.stt import STTService
@@ -33,6 +34,8 @@ class VoicePipeline:
         # so run it in a background thread.
         loop = asyncio.get_running_loop()
 
+        start = time.perf_counter()
+
         text = await loop.run_in_executor(
             None,
             self.stt.transcribe,
@@ -40,8 +43,26 @@ class VoicePipeline:
             sample_rate
         )
 
-        print("📝 User said:", text)
+        stt_time = time.perf_counter() - start
 
-        return text
+        print("📝 User said:", text)
+        print(f"⏱️ STT time: {stt_time:.2f}s")
+
+        start = time.perf_counter()
+
+        response = await loop.run_in_executor(
+            None,
+            self.llm.generate_response,
+            text
+        )
+
+        llm_time = time.perf_counter() - start
+
+        print("🤖 AI:", response)
+        print(f"⏱️ LLM time: {llm_time:.2f}s")
+
+        print(f"⏱️ Total STT + LLM: {stt_time + llm_time:.2f}s")
+
+        return response
 
 # asyncio.run(run_pipeline())
