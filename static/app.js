@@ -122,8 +122,43 @@ async function startRecording() {
                 "Microphone error: " + error.message;
         }
     };
+    socket.onmessage = async(event) => {
+        console.log("🔊 AI audio received");
 
-    
+        const audioBlob = new Blob(
+            [event.data],
+            {
+                type: "audio/mpeg"
+            }
+        );
+
+        const audioUrl = URL.createObjectURL(
+            audioBlob
+        );
+
+        const audio = new Audio(audioUrl);
+
+        audio.onended = () => {
+            console.log("🔊 AI finished speaking");
+            URL.revokeObjectURL(audioUrl);
+        };
+
+        try {
+
+            await audio.play();
+
+            console.log("🔊 AI is speaking");
+
+        } catch (error) {
+
+            console.error(
+                "Audio playback error:",
+                error
+            );
+        }
+    };
+
+
 
 
     socket.onerror = (error) => {
@@ -182,13 +217,17 @@ function stopRecording() {
         audioContext = null;
     }
 
-    // Close WebSocket
-    if (
-        socket &&
-        socket.readyState === WebSocket.OPEN
-    ) {
-        socket.close();
-    }
+    console.log(
+        "Microphone stopped. Waiting for AI response..."
+    );
 
-    console.log("Recording stopped");
+    // Close WebSocket
+    // if (
+    //     socket &&
+    //     socket.readyState === WebSocket.OPEN
+    // ) {
+    //     socket.close();
+    // }
+
+    // console.log("Recording stopped");
 }
