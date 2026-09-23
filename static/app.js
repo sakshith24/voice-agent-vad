@@ -123,6 +123,8 @@ async function startRecording() {
         }
     };
 
+    
+
 
     socket.onerror = (error) => {
 

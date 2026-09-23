@@ -4,6 +4,7 @@ import time
 from app.services.vad import VADService
 from app.services.stt import STTService
 from app.services.llm import LLMService
+from app.services.tts import TTSService
 
 
 class VoicePipeline:
@@ -12,6 +13,7 @@ class VoicePipeline:
         self.vad = VADService()
         self.stt = STTService()
         self.llm = LLMService()
+        self.tts = TTSService()
 
     async def process_chunk(self, chunk, sample_rate=16000):
         """
@@ -63,6 +65,13 @@ class VoicePipeline:
 
         print(f"⏱️ Total STT + LLM: {stt_time + llm_time:.2f}s")
 
-        return response
+        audio_file = await loop.run_in_executor(
+            None,
+            self.tts.synthesize,
+            response
+        )
+        print("🔊 Audio:", audio_file)
+
+        # return response
 
 # asyncio.run(run_pipeline())

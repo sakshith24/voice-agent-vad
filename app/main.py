@@ -70,12 +70,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Update the buffer to hold remaining leftover samples
                 audio_buffer = audio_buffer[chunk_size:]
 
-                text = await pipeline.process_chunk(
+                audio_file = await pipeline.process_chunk(
                     chunk,
                     sample_rate=16000
                 )
-                if text is not None:
-                    print("final text: ", text)
+                if audio_file is not None:
+                    print("🔊 Sending audio:: ", audio_file)
+                    with open(audio_file,"rb") as f:
+                        audio_data = f.read()
+                    await websocket.send_bytes(audio_data)
 
     except WebSocketDisconnect:
         print("Client disconnected")
