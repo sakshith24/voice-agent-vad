@@ -1,20 +1,29 @@
+import asyncio
+
 import numpy as np
 import torch
 import torchaudio
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from dotenv import load_dotenv
 
-from app.services.vad import VADService
 from app.pipeline import VoicePipeline
+from app.services.vad import VADService
+
 
 load_dotenv()
-pipeline = VoicePipeline()
 
-app = FastAPI(title="Interruptible Voice Agent")
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app = FastAPI(
+    title="Interruptible Voice Agent"
+)
+
+app.mount(
+    "/static",
+    StaticFiles(directory="static"),
+    name="static"
+)
 
 
 @app.get("/")
@@ -29,56 +38,427 @@ async def get_index():
 async def websocket_endpoint(websocket: WebSocket):
 
     await websocket.accept()
+
     print("Client connected via WebSocket")
 
-    vad = VADService()
+    # --------------------------------
+    # Per-session services
+    # --------------------------------
 
-    # Browser microphone sample rate
+    vad = VADService()
+    pipeline = VoicePipeline()
+
+    # --------------------------------
+    # Audio configuration
+    # --------------------------------
+
     input_sample_rate = 48000
+    target_sample_rate = 16000
     chunk_size = 512
 
-    # Persistent Audio Buffer initialized per WebSocket session
-    audio_buffer = torch.zeros(0, dtype=torch.float32)
+    audio_buffer = torch.zeros(
+        0,
+        dtype=torch.float32
+    )
+
+    # --------------------------------
+    # Response state
+    # --------------------------------
+
+    active_response_task = None
+
+    is_agent_speaking = False
+
+    # --------------------------------
+    # Outgoing message queue
+    # --------------------------------
+
+    outgoing_queue = asyncio.Queue()
+
+    # --------------------------------
+    # Send loop
+    # --------------------------------
+
+    async def send_loop():
+
+        try:
+
+            while True:
+
+                message = await outgoing_queue.get()
+
+                try:
+
+                    if isinstance(message, bytes):
+
+                        await websocket.send_bytes(
+                            message
+                        )
+
+                    elif isinstance(message, dict):
+
+                        await websocket.send_json(
+                            message
+                        )
+
+                finally:
+
+                    outgoing_queue.task_done()
+
+        except asyncio.CancelledError:
+
+            print("Send loop stopped")
+
+    send_task = asyncio.create_task(
+        send_loop()
+    )
+
+    # --------------------------------
+    # Cancel active AI response
+    # --------------------------------
+
+    async def interrupt_agent():
+
+        nonlocal active_response_task
+        nonlocal is_agent_speaking
+
+        print("⚡ INTERRUPT")
+
+        # Stop server-side processing
+        if (
+            active_response_task
+            and not active_response_task.done()
+        ):
+
+            active_response_task.cancel()
+
+            try:
+
+                await active_response_task
+
+            except asyncio.CancelledError:
+
+                pass
+
+            print(
+                "🛑 Active response cancelled"
+            )
+
+        active_response_task = None
+
+        is_agent_speaking = False
+
+        # Tell browser to stop audio
+        await outgoing_queue.put(
+            {
+                "type": "interrupt"
+            }
+        )
+
+    # --------------------------------
+    # Generate AI response
+    # --------------------------------
+
+    async def generate_response(
+        speech_audio
+    ):
+
+        nonlocal is_agent_speaking
+
+        try:
+
+            print(
+                "🚀 Starting AI pipeline..."
+            )
+
+            audio_file = await pipeline.process_audio(
+                speech_audio,
+                sample_rate=target_sample_rate
+            )
+
+            # If task was cancelled, don't send audio
+            if asyncio.current_task().cancelled():
+
+                print(
+                    "🛑 Response was cancelled"
+                )
+
+                return
+
+            if audio_file is None:
+
+                return
+
+            print(
+                "🔊 Sending audio:",
+                audio_file
+            )
+
+            with open(
+                audio_file,
+                "rb"
+            ) as audio:
+
+                audio_bytes = audio.read()
+
+            # Tell browser that AI audio is coming
+            await outgoing_queue.put(
+                {
+                    "type": "audio_start"
+                }
+            )
+
+            # Send audio
+            await outgoing_queue.put(
+                audio_bytes
+            )
+
+            # Browser will tell us when playback finishes
+
+        except asyncio.CancelledError:
+
+            print(
+                "🛑 AI response task cancelled"
+            )
+
+            raise
+
+        except Exception as error:
+
+            print(
+                "❌ Pipeline error:",
+                error
+            )
+
+        finally:
+
+            # Don't set is_agent_speaking=False here.
+            #
+            # The browser may still be playing the
+            # generated audio.
+            pass
+
+    # --------------------------------
+    # Receive loop
+    # --------------------------------
 
     try:
+
         while True:
 
-            data = await websocket.receive_bytes()
+            message = await websocket.receive()
 
-            # 1. PCM bytes → Int16 NumPy array
-            audio_int16 = np.frombuffer(data, dtype=np.int16).copy()
+            # ==================================
+            # BINARY AUDIO FROM MICROPHONE
+            # ==================================
 
-            # 2. Int16 → Float32
-            audio = torch.from_numpy(audio_int16).float() / 32768.0
+            if "bytes" in message:
 
-            # 3. 48 kHz → 16 kHz
-            if input_sample_rate != 16000:
-                audio = torchaudio.functional.resample(
-                    audio,
-                    input_sample_rate,
-                    16000
+                data = message["bytes"]
+
+                if data is None:
+                    continue
+
+                # ------------------------------
+                # PCM bytes → Int16
+                # ------------------------------
+
+                audio_int16 = np.frombuffer(
+                    data,
+                    dtype=np.int16
+                ).copy()
+
+                # ------------------------------
+                # Int16 → Float32
+                # ------------------------------
+
+                audio = (
+                    torch.from_numpy(
+                        audio_int16
+                    ).float()
+                    / 32768.0
                 )
 
-            # 4. Append converted incoming audio to persistent buffer
-            audio_buffer = torch.cat((audio_buffer, audio))
+                # ------------------------------
+                # 48kHz → 16kHz
+                # ------------------------------
 
-            # 5. Extract fixed 512-sample chunks while sufficient audio exists
-            while len(audio_buffer) >= chunk_size:
-                # Slice out the first 512 samples
-                chunk = audio_buffer[:chunk_size]
+                if (
+                    input_sample_rate
+                    != target_sample_rate
+                ):
 
-                # Update the buffer to hold remaining leftover samples
-                audio_buffer = audio_buffer[chunk_size:]
+                    audio = (
+                        torchaudio.functional.resample(
+                            audio,
+                            input_sample_rate,
+                            target_sample_rate
+                        )
+                    )
 
-                audio_file = await pipeline.process_chunk(
-                    chunk,
-                    sample_rate=16000
+                # ------------------------------
+                # Add to persistent buffer
+                # ------------------------------
+
+                audio_buffer = torch.cat(
+                    (
+                        audio_buffer,
+                        audio
+                    )
                 )
-                if audio_file is not None:
-                    print("🔊 Sending audio:: ", audio_file)
-                    with open(audio_file,"rb") as f:
-                        audio_data = f.read()
-                    await websocket.send_bytes(audio_data)
+
+                # ------------------------------
+                # Process 512 samples at a time
+                # ------------------------------
+
+                while (
+                    len(audio_buffer)
+                    >= chunk_size
+                ):
+
+                    chunk = audio_buffer[
+                        :chunk_size
+                    ]
+
+                    audio_buffer = audio_buffer[
+                        chunk_size:
+                    ]
+
+                    # --------------------------
+                    # VAD
+                    # --------------------------
+
+                    event = vad.process_chunk(
+                        chunk
+                    )
+
+                    if event is None:
+                        continue
+
+                    # ==========================
+                    # USER STARTED SPEAKING
+                    # ==========================
+
+                    if (
+                        event["type"]
+                        == "speech_start"
+                    ):
+
+                        print(
+                            "🎤 User started speaking"
+                        )
+
+                        # If AI is currently
+                        # speaking/processing,
+                        # interrupt it.
+                        if (
+                            is_agent_speaking
+                            or (
+                                active_response_task
+                                and not active_response_task.done()
+                            )
+                        ):
+
+                            await interrupt_agent()
+
+                    # ==========================
+                    # USER FINISHED SPEAKING
+                    # ==========================
+
+                    elif (
+                        event["type"]
+                        == "speech_end"
+                    ):
+
+                        print(
+                            "🔇 User finished speaking"
+                        )
+
+                        speech_audio = event[
+                            "audio"
+                        ]
+
+                        # Start new AI response
+                        # WITHOUT blocking
+                        # WebSocket receiving.
+                        active_response_task = (
+                            asyncio.create_task(
+                                generate_response(
+                                    speech_audio
+                                )
+                            )
+                        )
+
+            # ==================================
+            # JSON MESSAGE FROM BROWSER
+            # ==================================
+
+            elif "text" in message:
+
+                text = message["text"]
+
+                if not text:
+                    continue
+
+                import json
+
+                try:
+
+                    command = json.loads(text)
+
+                except json.JSONDecodeError:
+
+                    continue
+
+                # ------------------------------
+                # Browser finished playback
+                # ------------------------------
+
+                if (
+                    command.get("type")
+                    == "playback_finished"
+                ):
+
+                    print(
+                        "🔊 Browser finished AI audio"
+                    )
+
+                    is_agent_speaking = False
 
     except WebSocketDisconnect:
-        print("Client disconnected")
+
+        print(
+            "Client disconnected"
+        )
+
+    except Exception as error:
+
+        print(
+            "❌ WebSocket error:",
+            error
+        )
+
+    finally:
+
+        # Cancel AI response
+        if (
+            active_response_task
+            and not active_response_task.done()
+        ):
+
+            active_response_task.cancel()
+
+        # Stop sender
+        send_task.cancel()
+
+        try:
+
+            await send_task
+
+        except asyncio.CancelledError:
+
+            pass
+
+        print(
+            "🔌 WebSocket session closed"
+        )
