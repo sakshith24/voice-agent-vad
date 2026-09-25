@@ -69,26 +69,6 @@ async function startRecording() {
                 audioContext.sampleRate
             );
 
-            // -------------------------------
-            // Tell the server the REAL
-            // capture sample rate.
-            //
-            // The browser/OS picks this
-            // value (often 44100 or 48000,
-            // but not guaranteed to be
-            // either). The server must not
-            // assume a fixed rate when
-            // resampling to 16kHz.
-            // -------------------------------
-
-            socket.send(
-                JSON.stringify({
-                    type: "config",
-                    sampleRate:
-                        audioContext.sampleRate
-                })
-            );
-
 
             // -------------------------------
             // Microphone source
@@ -301,11 +281,6 @@ async function startRecording() {
             "🔊 AI audio received"
         );
 
-        // Never let two AI audio clips play
-        // at once. If one is already
-        // playing/queued, stop and discard
-        // it before starting the new one.
-        stopCurrentAudio();
 
         const audioBlob =
             new Blob(

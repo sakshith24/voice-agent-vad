@@ -52,15 +52,6 @@ async def websocket_endpoint(websocket: WebSocket):
     # Audio configuration
     # --------------------------------
 
-    # input_sample_rate is a FALLBACK ONLY.
-    # The browser's AudioContext does not
-    # always run at 48kHz (it depends on the
-    # OS/hardware — 44100Hz is common too).
-    # The real value is sent by the browser
-    # as a "config" message right after the
-    # WebSocket opens (see static/app.js) and
-    # overwrites this below, before any audio
-    # bytes are resampled.
     input_sample_rate = 48000
     target_sample_rate = 16000
     chunk_size = 512
@@ -216,27 +207,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "audio_start"
                 }
             )
-
-            # Mark the agent as speaking NOW.
-            #
-            # This task is about to `return`
-            # right after this, which makes
-            # active_response_task.done() ==
-            # True almost immediately - long
-            # before the browser has actually
-            # finished playing the audio.
-            #
-            # Without this flag, a speech_start
-            # that arrives while audio A is
-            # still playing sees
-            # active_response_task.done() ==
-            # True and is_agent_speaking ==
-            # False, so it is NOT treated as an
-            # interrupt - it starts a brand new
-            # response B, whose audio gets sent
-            # and played ON TOP OF audio A
-            # (two overlapping AI voices).
-            is_agent_speaking = True
 
             # Send audio
             await outgoing_queue.put(
@@ -408,19 +378,6 @@ async def websocket_endpoint(websocket: WebSocket):
                             "audio"
                         ]
 
-                        duration_sec = (
-                            speech_audio.numel()
-                            / target_sample_rate
-                        )
-
-                        print(
-                            "========== AUDIO DEBUG ==========\n"
-                            f"Input sample rate used for resampling: {input_sample_rate}\n"
-                            f"Final speech samples:                  {speech_audio.numel()}\n"
-                            f"Final speech duration:                 {duration_sec:.2f}s\n"
-                            "=================================="
-                        )
-
                         # Start new AI response
                         # WITHOUT blocking
                         # WebSocket receiving.
@@ -467,33 +424,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     )
 
                     is_agent_speaking = False
-
-                # ------------------------------
-                # Browser reported its real
-                # capture sample rate
-                # ------------------------------
-
-                elif (
-                    command.get("type")
-                    == "config"
-                ):
-
-                    reported_rate = command.get(
-                        "sampleRate"
-                    )
-
-                    if reported_rate:
-
-                        input_sample_rate = int(
-                            reported_rate
-                        )
-
-                        print(
-                            "========== AUDIO DEBUG ==========\n"
-                            f"Browser-reported input sample rate: {input_sample_rate}\n"
-                            f"Target sample rate:                 {target_sample_rate}\n"
-                            "=================================="
-                        )
 
     except WebSocketDisconnect:
 

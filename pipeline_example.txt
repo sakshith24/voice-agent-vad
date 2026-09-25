@@ -42,9 +42,7 @@ class VoicePipeline:
 
         stt_time = time.perf_counter() - start
 
-        print("========== STT RESULT ==========")
-        print("Transcription:", text)
-        print("=================================")
+        print("📝 User said:", text)
         print(f"⏱️ STT time: {stt_time:.2f}s")
 
         if not text.strip():
@@ -54,10 +52,6 @@ class VoicePipeline:
         # -------------------------
         # LLM
         # -------------------------
-
-        print("========== LLM INPUT ==========")
-        print("User text:", text)
-        print("===============================")
 
         start = time.perf_counter()
 
@@ -69,9 +63,7 @@ class VoicePipeline:
 
         llm_time = time.perf_counter() - start
 
-        print("========== LLM RESPONSE ==========")
-        print(response)
-        print("===================================")
+        print("🤖 AI:", response)
         print(f"⏱️ LLM time: {llm_time:.2f}s")
 
         # -------------------------

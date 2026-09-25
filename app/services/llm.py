@@ -12,7 +12,7 @@ class LLMService:
             messages=[
                 {
                     "role":"system",
-                    "content":"You are a helpful voice assistant. Keep responses concise."
+                    "content":"You are a helpful voice assistant. Keep responses concise , Respond in english"
                 },
                 {
                     "role":"user",
